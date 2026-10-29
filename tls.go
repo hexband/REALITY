@@ -213,6 +213,7 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				break
 			}
 			var peerPub, peerPub2 []byte
+			nonPQ := false
 			for _, keyShare := range hs.clientHello.keyShares {
 				if keyShare.group == X25519MLKEM768 && len(keyShare.data) == mlkem.EncapsulationKeySize768+32 {
 					if peerPub2 != nil {
@@ -231,8 +232,13 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 					break // ensure order
 				}
 			}
-			if peerPub2 == nil {
-				break // reject outdated/strange Client Hello that doesn't have X25519MLKEM768 before optional X25519
+			if mode := config.nonPQMode(); mode == nonPQAll {
+				peerPub, peerPub2 = legacyPeerPub(hs.clientHello.keyShares), nil // see nonpq.go
+			} else if peerPub2 == nil {
+				if peerPub == nil || mode != nonPQLegacy || hasKeyShare(hs.clientHello.keyShares, X25519MLKEM768) {
+					break // reject outdated/strange Client Hello that doesn't have X25519MLKEM768 before optional X25519
+				}
+				nonPQ = true // plain X25519 only, see nonpq.go
 			}
 			if peerPub == nil {
 				peerPub = peerPub2 // secondary choice: X25519 in X25519MLKEM768
@@ -271,6 +277,7 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				}
 				if (config.MinClientVer == nil || Value(hs.c.ClientVer[:]...) >= Value(config.MinClientVer...)) &&
 					(config.MaxClientVer == nil || Value(hs.c.ClientVer[:]...) <= Value(config.MaxClientVer...)) &&
+					(!nonPQ || nonPQClientVer(hs.c.ClientVer[:])) &&
 					(config.MaxTimeDiff == 0 || time.Since(hs.c.ClientTime).Abs() <= config.MaxTimeDiff) &&
 					(config.ShortIds[hs.c.ClientShortId]) {
 					hs.c.conn = conn
